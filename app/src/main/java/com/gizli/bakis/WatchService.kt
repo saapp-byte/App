@@ -45,6 +45,8 @@ class WatchService : LifecycleService() {
     private var showingNotes = false
     private var multiCount = 0
     private var singleCount = 0
+    private var lastCount = -1
+    private var lastInfo = ""
 
     override fun onCreate() {
         super.onCreate()
@@ -64,27 +66,42 @@ class WatchService : LifecycleService() {
         startCamera()
     }
 
+    private fun buildNotification(text: String) =
+        NotificationCompat.Builder(this, "watch")
+            .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setContentTitle("Gizli Bakış çalışıyor")
+            .setContentText(text)
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+                )
+            )
+            .addAction(
+                0, "Durdur",
+                PendingIntent.getService(
+                    this, 1, Intent(this, WatchService::class.java).setAction("STOP"),
+                    PendingIntent.FLAG_IMMUTABLE
+                )
+            )
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .build()
+
     private fun startAsForeground() {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel("watch", "Gizli Bakış", NotificationManager.IMPORTANCE_LOW)
         )
-        val open = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+        ServiceCompat.startForeground(
+            this, 1, buildNotification("Ön kamera yüz sayısını izliyor"),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
         )
-        val stop = PendingIntent.getService(
-            this, 1, Intent(this, WatchService::class.java).setAction("STOP"),
-            PendingIntent.FLAG_IMMUTABLE
-        )
-        val n = NotificationCompat.Builder(this, "watch")
-            .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setContentTitle("Gizli Bakış çalışıyor")
-            .setContentText("Ön kamera yüz sayısını izliyor")
-            .setContentIntent(open)
-            .addAction(0, "Durdur", stop)
-            .setOngoing(true)
-            .build()
-        ServiceCompat.startForeground(this, 1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA)
+    }
+
+    private fun showInfo(text: String) {
+        if (text == lastInfo) return
+        lastInfo = text
+        getSystemService(NotificationManager::class.java).notify(1, buildNotification(text))
     }
 
     @Suppress("DEPRECATION")
@@ -116,6 +133,11 @@ class WatchService : LifecycleService() {
     }
 
     private fun onFaces(count: Int) {
+        if (count != lastCount) {
+            lastCount = count
+            showInfo("Görülen yüz: $count")
+        }
+
         if (!pm.isInteractive) { // ekran kapalıysa hiçbir şey yapma
             multiCount = 0; singleCount = 0
             return
@@ -134,10 +156,21 @@ class WatchService : LifecycleService() {
     }
 
     private fun launch(pkg: String?) {
-        if (pkg == null) return
-        val i = packageManager.getLaunchIntentForPackage(pkg) ?: return
-        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        try { startActivity(i) } catch (_: Exception) {}
+        if (pkg == null) {
+            showInfo("Uygulama seçilmemiş")
+            return
+        }
+        val i = packageManager.getLaunchIntentForPackage(pkg)
+        if (i == null) {
+            showInfo("Uygulama bulunamadı: $pkg")
+            return
+        }
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        try {
+            startActivity(i)
+        } catch (e: Exception) {
+            showInfo("Açılamadı: " + (e.message ?: "izin engeli"))
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
